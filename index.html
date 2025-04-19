@@ -1,23 +1,108 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>IPFS Example</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Chat App</title>
     <script src="https://unpkg.com/ipfs@0.66.0/dist/index.min.js"></script>
+    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        #hub, #chat-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        #user-list {
+            list-style: none;
+            padding: 0;
+        }
+        #user-list li {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #user-list li button {
+            padding: 5px 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #user-list li button:hover {
+            background-color: #0056b3;
+        }
+        #chat-messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #chat-input {
+            width: calc(100% - 90px);
+            padding: 5px;
+        }
+        #send-btn {
+            padding: 5px 10px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #send-btn:hover {
+            background-color: #218838;
+        }
+        .message {
+            margin: 5px 0;
+        }
+        .message.sent {
+            text-align: right;
+            color: #007bff;
+        }
+        .message.received {
+            text-align: left;
+            color: #333;
+        }
+    </style>
 </head>
 <body>
+    <div id="hub">
+        <h2>Chat Hub</h2>
+        <label>Nickname: <input id="nickname" value="Anonymous" maxlength="20"></label>
+        <button onclick="updateNickname()">Update</button>
+        <h3>Available Users</h3>
+        <ul id="user-list"></ul>
+    </div>
+    <div id="chat-container" style="display: none;">
+        <h2>Chat with <span id="chat-partner"></span></h2>
+        <div id="chat-messages"></div>
+        <input id="chat-input" placeholder="Type a message...">
+        <button id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+
     <script>
-        let myId;
-        const topic = 'my-topic';
+        let ipfs;
+        let myId, nickname = 'Anonymous';
+        const peers = new Map();
+        const presenceInterval = 30000; // 30 seconds
+        const timeoutThreshold = 60000; // 60 seconds
+        const users = new Map();
+        const topic = 'chat-hub';
 
-        function startPresence() {
-            console.log('Starting presence with ID:', myId);
-        }
-
-        function handleMessage(msg) {
-            console.log('Received message:', msg);
-        }
-
-        Ipfs.create().then(async ipfs => {
+        Ipfs.create().then(async node => {
+            ipfs = node;
             const peerInfo = await ipfs.id();
             myId = peerInfo.id;
             console.log('My ID:', myId);
@@ -25,6 +110,132 @@
             ipfs.pubsub.subscribe(topic, handleMessage);
         }).catch(err => {
             console.error('Failed to create IPFS node:', err);
+        });
+
+        function startPresence() {
+            setInterval(() => {
+                ipfs.pubsub.publish(topic, JSON.stringify({
+                    type: 'presence',
+                    sender: myId,
+                    nickname: nickname
+                }));
+            }, presenceInterval);
+        }
+
+        function updateNickname() {
+            nickname = document.getElementById('nickname').value || 'Anonymous';
+        }
+
+        async function handleMessage(msg) {
+            const data = JSON.parse(new TextDecoder().decode(msg.data));
+            const sender = data.sender;
+
+            if (sender === myId) return;
+
+            if (data.type === 'presence') {
+                users.set(sender, { nickname: data.nickname, lastSeen: Date.now() });
+                updateUserList();
+            } else if (data.recipient === myId) {
+                if (data.type === 'invite') {
+                    if (confirm(`${data.nickname} wants to chat. Accept?`)) {
+                        ipfs.pubsub.publish(topic, JSON.stringify({
+                            type: 'accept',
+                            sender: myId,
+                            recipient: sender,
+                            nickname: nickname
+                        }));
+                        startChat(sender, data.nickname, true);
+                    }
+                } else if (data.type === 'accept') {
+                    startChat(sender, data.nickname, false);
+                } else if (data.type === 'signal') {
+                    const peer = peers.get(sender);
+                    if (peer) peer.signal(data.data);
+                }
+            }
+        }
+
+        function updateUserList() {
+            const now = Date.now();
+            for (const [id, info] of users) {
+                if (now - info.lastSeen > timeoutThreshold) users.delete(id);
+            }
+            const userList = document.getElementById('user-list');
+            userList.innerHTML = '';
+            for (const [id, info] of users) {
+                const li = document.createElement('li');
+                li.textContent = info.nickname;
+                const btn = document.createElement('button');
+                btn.textContent = 'Chat';
+                btn.onclick = () => inviteUser(id, info.nickname);
+                li.appendChild(btn);
+                userList.appendChild(li);
+            }
+        }
+
+        function inviteUser(id, nick) {
+            ipfs.pubsub.publish(topic, JSON.stringify({
+                type: 'invite',
+                sender: myId,
+                recipient: id,
+                nickname: nickname
+            }));
+        }
+
+        function startChat(partnerId, partnerNick, initiator) {
+            const peer = new SimplePeer({
+                initiator: initiator,
+                trickle: true,
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+            });
+
+            peer.on('signal', data => {
+                ipfs.pubsub.publish(topic, JSON.stringify({
+                    type: 'signal',
+                    sender: myId,
+                    recipient: partnerId,
+                    data: data
+                }));
+            });
+
+            peer.on('connect', () => {
+                document.getElementById('hub').style.display = 'none';
+                const chatContainer = document.getElementById('chat-container');
+                chatContainer.style.display = 'block';
+                document.getElementById('chat-partner').textContent = partnerNick;
+            });
+
+            peer.on('data', data => {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message received';
+                msgDiv.textContent = new TextDecoder().decode(data);
+                document.getElementById('chat-messages').appendChild(msgDiv);
+            });
+
+            peer.on('close', () => {
+                document.getElementById('chat-container').style.display = 'none';
+                document.getElementById('hub').style.display = 'block';
+                peers.delete(partnerId);
+            });
+
+            peers.set(partnerId, peer);
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if (!msg || peers.size === 0) return;
+            const peer = peers.values().next().value;
+            peer.send(msg);
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message sent';
+            msgDiv.textContent = msg;
+            document.getElementById('chat-messages').appendChild(msgDiv);
+            input.value = '';
+        }
+
+        document.getElementById('chat-input').addEventListener('keypress', e => {
+            if (e.key === 'Enter') sendMessage();
         });
     </script>
 </body>
