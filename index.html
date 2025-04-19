@@ -1,26 +1,131 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FastChat</title>
-  <link rel="stylesheet" href="styles.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Chat App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        #chat-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #message-input, #peer-id-input {
+            width: calc(100% - 80px);
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #peer-id-display {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+    </style>
 </head>
 <body>
-  <div id="app">
-    <header>
-      <h1>FastChat</h1>
-      <input id="username" placeholder="Your name..." />
-    </header>
+    <div id="chat-container">
+        <div id="peer-id-display">Your Peer ID: <span id="my-peer-id">Loading...</span></div>
+        <input id="peer-id-input" type="text" placeholder="Enter peer ID to connect">
+        <button onclick="connectToPeer()">Connect</button>
+        <div id="messages"></div>
+        <input id="message-input" type="text" placeholder="Type a message">
+        <button onclick="sendMessage()">Send</button>
+    </div>
 
-    <main id="chat-box"></main>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script>
+        let peer = new Peer();
+        let conn = null;
 
-    <form id="chat-form">
-      <input type="text" id="chat-input" placeholder="Type a message..." required />
-      <button type="submit">Send</button>
-    </form>
-  </div>
+        // Display peer ID when generated
+        peer.on('open', function(id) {
+            document.getElementById('my-peer-id').textContent = id;
+        });
 
-  <script src="script.js" defer></script>
+        // Handle incoming connections
+        peer.on('connection', function(connection) {
+            conn = connection;
+            setupConnection();
+        });
+
+        // Connect to another peer
+        function connectToPeer() {
+            const peerId = document.getElementById('peer-id-input').value;
+            if (peerId) {
+                conn = peer.connect(peerId);
+                setupConnection();
+            } else {
+                alert('Please enter a peer ID');
+            }
+        }
+
+        // Set up connection event listeners
+        function setupConnection() {
+            conn.on('open', function() {
+                addMessage('Connected to peer!');
+            });
+            conn.on('data', function(data) {
+                addMessage(`Peer: ${data}`);
+            });
+            conn.on('close', function() {
+                addMessage('Connection closed.');
+                conn = null;
+            });
+        }
+
+        // Send a message
+        function sendMessage() {
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput.value;
+            if (message && conn && conn.open) {
+                conn.send(message);
+                addMessage(`You: ${message}`);
+                messageInput.value = '';
+            } else {
+                alert('Not connected to a peer or no message entered.');
+            }
+        }
+
+        // Display message in the chat
+        function addMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('p');
+            messageElement.textContent = message;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Handle errors
+        peer.on('error', function(err) {
+            console.error('PeerJS error:', err);
+            addMessage(`Error: ${err.type}`);
+        });
+    </script>
 </body>
 </html>
