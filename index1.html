@@ -122,8 +122,8 @@
       const shareId = mockSignaling.generateId();
       mockSignaling.sendOffer(shareId, offer);
 
-      // Generate shareable URL
-      const shareUrl = `${window.location.origin}/?shareId=${shareId}`;
+      // Generate shareable URL with correct base path
+      const shareUrl = `https://stefwxters.github.io/Real-time-Chat/?shareId=${shareId}`;
       linkOutput.textContent = shareUrl;
       linkOutput.style.display = 'block';
 
