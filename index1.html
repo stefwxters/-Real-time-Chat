@@ -16,9 +16,11 @@
     #fileInput { display: none; }
     #linkOutput { margin-top: 20px; padding: 10px; background: #fff; border: 1px solid #ddd; word-break: break-all; }
     #downloadSection { margin-top: 20px; }
+    #answerInput { margin-top: 20px; width: 100%; padding: 10px; }
     button { padding: 10px 20px; background: #007bff; color: #fff; border: none; cursor: pointer; font-size: 16px; margin-top: 10px; }
     button:hover { background: #0056b3; }
     p { margin: 10px 0; }
+    textarea { width: 100%; height: 100px; margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -28,13 +30,23 @@
     <input type="file" id="fileInput">
     <p id="status">Select a file to share</p>
     <div id="linkOutput" style="display: none;"></div>
+    <textarea id="offerOutput" placeholder="Offer will appear here (share with recipient)" style="display: none;"></textarea>
+    <div id="answerSection" style="display: none;">
+      <p>Paste the answer from the recipient here:</p>
+      <textarea id="answerInput" placeholder="Paste answer here"></textarea>
+      <button id="submitAnswer">Submit Answer</button>
+    </div>
     <div id="downloadSection" style="display: none;">
       <p>Downloading...</p>
+      <textarea id="answerOutput" placeholder="Answer will appear here (share with uploader)" style="display: none;"></textarea>
       <button id="saveFile">Save File</button>
     </div>
   </div>
 
   <script>
+    // Configuration: Set your base URL here
+    const BASE_URL = 'https://stefwxters.github.io/Real-time-Chat'; // Replace with your hosting URL, e.g., https://yourdomain.com
+
     // WebRTC and file handling logic
     let peerConnection = null;
     let dataChannel = null;
@@ -44,30 +56,37 @@
     let fileName = '';
     let fileSize = 0;
 
-    // Mock signaling server (in production, use WebSocket or service)
+    // Mock signaling for same-device testing (replace with manual exchange in production)
     const mockSignaling = {
       generateId: () => Math.random().toString(36).substring(2, 10),
-      sendOffer: (id, offer) => localStorage.setItem(id, JSON.stringify(offer)),
+      storeOffer: (id, offer) => localStorage.setItem(id, JSON.stringify(offer)),
       getOffer: (id) => JSON.parse(localStorage.getItem(id) || null),
-      sendAnswer: (id, answer) => localStorage.setItem(id + '_answer', JSON.stringify(answer)),
+      storeAnswer: (id, answer) => localStorage.setItem(id + '_answer', JSON.stringify(answer)),
       getAnswer: (id) => JSON.parse(localStorage.getItem(id + '_answer') || null)
     };
 
     // Initialize WebRTC
-    function initPeerConnection() {
+    function initPeerConnection(isUploader) {
       peerConnection = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
 
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-          // In production, send candidate via signaling server
+          // In production, candidates are included in offer/answer
         }
       };
 
-      dataChannel = peerConnection.createDataChannel('fileTransfer');
-      dataChannel.onopen = () => console.log('Data channel open');
-      dataChannel.onmessage = handleMessage;
+      if (isUploader) {
+        dataChannel = peerConnection.createDataChannel('fileTransfer');
+        dataChannel.onopen = () => console.log('Data channel open');
+        dataChannel.onmessage = handleMessage;
+      } else {
+        peerConnection.ondatachannel = (event) => {
+          dataChannel = event.channel;
+          dataChannel.onmessage = handleMessage;
+        };
+      }
     }
 
     // Handle incoming messages (file chunks)
@@ -90,6 +109,10 @@
     const fileInput = document.getElementById('fileInput');
     const status = document.getElementById('status');
     const linkOutput = document.getElementById('linkOutput');
+    const offerOutput = document.getElementById('offerOutput');
+    const answerInput = document.getElementById('answerInput');
+    const answerSection = document.getElementById('answerSection');
+    const submitAnswer = document.getElementById('submitAnswer');
 
     dropZone.addEventListener('click', () => fileInput.click());
     dropZone.addEventListener('dragover', (e) => {
@@ -112,20 +135,27 @@
     async function handleFile(file) {
       if (!file) return;
       status.textContent = `Selected ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
-      initPeerConnection();
+      initPeerConnection(true);
+
+      // Generate unique share ID
+      const shareId = mockSignaling.generateId();
 
       // Create offer
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
-      // Mock signaling: Store offer
-      const shareId = mockSignaling.generateId();
-      mockSignaling.sendOffer(shareId, offer);
+      // Store offer for same-device testing
+      mockSignaling.storeOffer(shareId, offer);
 
-      // Generate shareable URL with correct base path
-      const shareUrl = `https://stefwxters.github.io/Real-time-Chat/?shareId=${shareId}`;
+      // Generate shareable URL
+      const shareUrl = `${BASE_URL}/?shareId=${shareId}`;
       linkOutput.textContent = shareUrl;
       linkOutput.style.display = 'block';
+
+      // Show offer for manual signaling
+      offerOutput.value = JSON.stringify(offer);
+      offerOutput.style.display = 'block';
+      answerSection.style.display = 'block';
 
       // Send file when channel is open
       dataChannel.onopen = () => {
@@ -141,7 +171,17 @@
         fileReader.readAsArrayBuffer(file);
       };
 
-      // Check for answer
+      // Check for answer (manual or mock)
+      submitAnswer.addEventListener('click', async () => {
+        const answerText = answerInput.value.trim();
+        if (answerText) {
+          const answer = JSON.parse(answerText);
+          await peerConnection.setRemoteDescription(answer);
+          status.textContent = 'Connected! Transferring file...';
+        }
+      });
+
+      // Poll for answer in same-device testing
       const checkAnswer = setInterval(async () => {
         const answer = mockSignaling.getAnswer(shareId);
         if (answer) {
@@ -155,19 +195,45 @@
     async function handleDownload(shareId) {
       document.getElementById('dropZone').style.display = 'none';
       document.getElementById('downloadSection').style.display = 'block';
-      initPeerConnection();
+      initPeerConnection(false);
 
-      // Get offer from signaling
+      // Get offer (manual or mock)
       const offer = mockSignaling.getOffer(shareId);
       if (!offer) {
-        status.textContent = 'Invalid or expired share link';
+        status.textContent = 'Waiting for offer... Paste the offer below:';
+        const offerInput = document.createElement('textarea');
+        offerInput.placeholder = 'Paste offer here';
+        offerInput.style.width = '100%';
+        offerInput.style.height = '100px';
+        offerInput.style.marginTop = '10px';
+        const submitOffer = document.createElement('button');
+        submitOffer.textContent = 'Submit Offer';
+        submitOffer.style.marginTop = '10px';
+        document.getElementById('downloadSection').prepend(submitOffer, offerInput);
+
+        submitOffer.addEventListener('click', async () => {
+          const offerText = offerInput.value.trim();
+          if (offerText) {
+            const offer = JSON.parse(offerText);
+            await peerConnection.setRemoteDescription(offer);
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            document.getElementById('answerOutput').value = JSON.stringify(answer);
+            document.getElementById('answerOutput').style.display = 'block';
+            status.textContent = 'Answer generated. Share it with the uploader.';
+            mockSignaling.storeAnswer(shareId, answer); // For same-device testing
+          }
+        });
         return;
       }
 
       await peerConnection.setRemoteDescription(offer);
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
-      mockSignaling.sendAnswer(shareId, answer);
+      document.getElementById('answerOutput').value = JSON.stringify(answer);
+      document.getElementById('answerOutput').style.display = 'block';
+      status.textContent = 'Answer generated. Share it with the uploader.';
+      mockSignaling.storeAnswer(shareId, answer); // For same-device testing
 
       // Handle file save
       document.getElementById('saveFile').addEventListener('click', () => {
