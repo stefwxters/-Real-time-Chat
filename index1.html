@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P File Share</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;background:#f4f4f4;color:#333;display:flex;justify-content:center;align-items:center;min-height:100vh}.container{max-width:600px;width:90%;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-align:center}h1{font-size:24px;margin-bottom:20px;color:#1a73e8}input[type="file"]{display:block;margin:20px auto;padding:10px;border:1px solid #ddd;border-radius:4px;cursor:pointer}button{background:#1a73e8;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;font-size:16px;transition:background .2s}button:hover{background:#1557b0}button:disabled{background:#ccc;cursor:not-allowed}#status{margin-top:20px;font-size:14px;color:#555}#progress{display:none;margin-top:10px;width:100%;height:10px;border-radius:5px;background:#ddd}#progress div{background:#1a73e8;height:100%;border-radius:5px;width:0%}@media (max-width:480px){.container{padding:15px}h1{font-size:20px}button{padding:8px 16px;font-size:14px}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>P2P File Share</h1>
+    <input type="file" id="fileInput" />
+    <button id="shareBtn" disabled>Share File</button>
+    <button id="connectBtn" disabled>Connect to Peer</button>
+    <div id="status">Select a file to share</div>
+    <div id="progress"><div></div></div>
+  </div>
+  <script>
+    const fileInput=document.getElementById('fileInput'),shareBtn=document.getElementById('shareBtn'),connectBtn=document.getElementById('connectBtn'),statusDiv=document.getElementById('status'),progressDiv=document.getElementById('progress').firstChild;let peer=null,file=null,conn=null;function initPeer(){peer=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});peer.onicecandidate=e=>e.candidate&&navigator.clipboard.writeText(JSON.stringify(peer.localDescription)).then(()=>statusDiv.textContent='Offer copied! Share with peer.');peer.ondatachannel=e=>{conn=e.channel;setupDataChannel()};return peer}fileInput.onchange=e=>{file=e.target.files[0];shareBtn.disabled=!file;statusDiv.textContent=file?'File selected: '+file.name:'Select a file to share'};shareBtn.onclick=async()=>{if(!file)return;peer=initPeer();conn=peer.createDataChannel('fileChannel');setupDataChannel();const offer=await peer.createOffer();await peer.setLocalDescription(offer)};connectBtn.onclick=async()=>{try{const sdp=await navigator.clipboard.readText();if(!sdp)return;peer=initPeer();await peer.setRemoteDescription(JSON.parse(sdp));const answer=await peer.createAnswer();await peer.setLocalDescription(answer);await navigator.clipboard.writeText(JSON.stringify(peer.localDescription));statusDiv.textContent='Answer copied! Share back with peer.'}catch(e){statusDiv.textContent='Error: Invalid offer'}};function setupDataChannel(){conn.onopen=()=>{statusDiv.textContent='Connected! Sending file...';progressDiv.parentElement.style.display='block';sendFile()};conn.onmessage=e=>statusDiv.textContent=e.data;conn.onclose=()=>statusDiv.textContent='Connection closed'}async function sendFile(){const chunkSize=16384,reader=new FileReader();let offset=0;reader.onload=e=>{if(e.target.error)return statusDiv.textContent='Error reading file';const buffer=new Uint8Array(e.target.result);conn.send(buffer);offset+=buffer.length;progressDiv.style.width=(offset/file.size*100)+'%';if(offset<file.size){readNext()}else{conn.send('File transfer complete');progressDiv.style.width='100%';statusDiv.textContent='File sent!'}};function readNext(){const slice=file.slice(offset,offset+chunkSize);reader.readAsArrayBuffer(slice)}readNext()}navigator.permissions.query({name:'clipboard-read'}).then(r=>connectBtn.disabled=r.state!=='granted');if(!window.RTCPeerConnection)statusDiv.textContent='WebRTC not supported';
+  </script>
+</body>
+</html>
