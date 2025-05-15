@@ -1,382 +1,50 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P Chat App</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Local Chat App</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; }
+    #chat { border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: scroll; }
+    .msg { margin: 5px 0; }
+    #inputArea { display: flex; margin-top: 10px; }
+    #msgInput { flex: 1; padding: 8px; }
+    #sendBtn { padding: 8px 12px; }
+  </style>
 </head>
-<body class="bg-gray-100 flex flex-col h-screen">
-  <div id="app" class="flex flex-col h-full">
-    <!-- Header -->
-    <header class="bg-blue-600 text-white p-4 flex justify-between items-center">
-      <h1 class="text-lg font-bold">P2P Chat</h1>
-      <div>
-        <span id="user-id" class="mr-4"></span>
-        <button id="copy-id" class="bg-blue-700 px-2 py-1 rounded">Copy ID</button>
-      </div>
-    </header>
-
-    <!-- Main Content -->
-    <main class="flex flex-1 overflow-hidden">
-      <!-- Sidebar: Room List -->
-      <aside class="w-1/4 bg-white border-r p-4 overflow-y-auto">
-        <h2 class="text-lg font-semibold mb-4">Rooms</h2>
-        <ul id="room-list" class="space-y-2"></ul>
-        <div class="mt-4">
-          <input id="invite-id" type="text" placeholder="Enter User ID to Invite" class="w-full p-2 border rounded">
-          <button id="send-invite" class="w-full bg-blue-600 text-white p-2 mt-2 rounded">Send Invite</button>
-        </div>
-      </aside>
-
-      <!-- Chat Area -->
-      <section class="flex-1 flex flex-col">
-        <div id="chat-header" class="bg-gray-200 p-4 font-semibold"></div>
-        <div id="messages" class="flex-1 p-4 overflow-y-auto bg-white"></div>
-        <div class="p-4 bg-gray-100 border-t">
-          <input id="message-input" type="text" placeholder="Type a message..." class="w-full p-2 border rounded">
-          <input id="file-input" type="file" accept="image/*,video/*" class="hidden">
-          <div class="flex mt-2">
-            <button id="send-message" class="bg-blue-600 text-white px-4 py-2 rounded mr-2">Send</button>
-            <button id="attach-file" class="bg-gray-600 text-white px-4 py-2 rounded">Attach</button>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <!-- Invite Modal -->
-    <div id="invite-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-      <div class="bg-white p-6 rounded shadow-lg">
-        <p id="invite-message" class="mb-4"></p>
-        <div class="flex justify-end space-x-2">
-          <button id="accept-invite" class="bg-green-600 text-white px-4 py-2 rounded">Accept</button>
-          <button id="reject-invite" class="bg-red-600 text-white px-4 py-2 rounded">Reject</button>
-        </div>
-      </div>
-    </div>
+<body>
+  <h2>Local Chat (Same Browser Tabs)</h2>
+  <div id="chat"></div>
+  <div id="inputArea">
+    <input type="text" id="msgInput" placeholder="Type a message..." />
+    <button id="sendBtn">Send</button>
   </div>
 
   <script>
-    // Generate UUID for user ID
-    function generateUUID() {
-      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-      });
-    }
+    const channel = new BroadcastChannel('chat_channel');
+    const chatBox = document.getElementById('chat');
+    const input = document.getElementById('msgInput');
+    const button = document.getElementById('sendBtn');
 
-    // IndexedDB Setup
-    const dbPromise = indexedDB.open('chatDB', 1);
-    let db;
-    dbPromise.onupgradeneeded = (event) => {
-      db = event.target.result;
-      db.createObjectStore('messages', { keyPath: 'id', autoIncrement: true });
-    };
-    dbPromise.onsuccess = (event) => {
-      db = event.target.result;
-    };
-
-    // Save message to IndexedDB
-    async function saveMessage(roomId, message) {
-      const tx = db.transaction('messages', 'readwrite');
-      const store = tx.objectStore('messages');
-      store.add({ roomId, ...message });
-      await tx.complete;
-    }
-
-    // Load messages from IndexedDB
-    async function loadMessages(roomId) {
-      const tx = db.transaction('messages', 'readonly');
-      const store = tx.objectStore('messages');
-      const request = store.getAll();
-      return new Promise((resolve) => {
-        request.onsuccess = () => {
-          const messages = request.result.filter(msg => msg.roomId === roomId);
-          resolve(messages);
-        };
-      });
-    }
-
-    // WebSocket for signaling
-    const ws = new WebSocket('ws://localhost:8080');
-    const userId = localStorage.getItem('userId') || generateUUID();
-    localStorage.setItem('userId', userId);
-    document.getElementById('user-id').textContent = `ID: ${userId}`;
-
-    // WebRTC Connections
-    const peers = new Map();
-    const rooms = new Map(); // roomId -> {peerId, status}
-    let currentRoom = null;
-
-    // UI Elements
-    const roomList = document.getElementById('room-list');
-    const messagesDiv = document.getElementById('messages');
-    const chatHeader = document.getElementById('chat-header');
-    const messageInput = document.getElementById('message-input');
-    const sendMessageBtn = document.getElementById('send-message');
-    const attachFileBtn = document.getElementById('attach-file');
-    const fileInput = document.getElementById('file-input');
-    const inviteIdInput = document.getElementById('invite-id');
-    const sendInviteBtn = document.getElementById('send-invite');
-    const inviteModal = document.getElementById('invite-modal');
-    const inviteMessage = document.getElementById('invite-message');
-    const acceptInviteBtn = document.getElementById('accept-invite');
-    const rejectInviteBtn = document.getElementById('reject-invite');
-    const copyIdBtn = document.getElementById('copy-id');
-
-    // Copy User ID
-    copyIdBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(userId);
-      alert('User ID copied!');
-    });
-
-    // Create WebRTC Peer Connection
-    function createPeerConnection(peerId, roomId) {
-      const peer = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-      });
-
-      // Data Channel
-      const dataChannel = peer.createDataChannel('chat');
-      dataChannel.onopen = () => {
-        rooms.get(roomId).status = 'connected';
-        updateRoomList();
-      };
-      dataChannel.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        displayMessage(roomId, message);
-        saveMessage(roomId, message);
-      };
-
-      peer.ondatachannel = (event) => {
-        event.channel.onmessage = (event) => {
-          const message = JSON.parse(event.data);
-          displayMessage(roomId, message);
-          saveMessage(roomId, message);
-        };
-      };
-
-      // ICE Candidates
-      peer.onicecandidate = (event) => {
-        if (event.candidate) {
-          ws.send(JSON.stringify({
-            type: 'ice',
-            from: userId,
-            to: peerId,
-            roomId,
-            candidate: event.candidate
-          }));
-        }
-      };
-
-      peers.set(peerId, peer);
-      return peer;
-    }
-
-    // Handle WebSocket Messages
-    ws.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      const { type, from, to, roomId, sdp, candidate, inviteeId } = data;
-
-      if (type === 'invite') {
-        inviteModal.classList.remove('hidden');
-        inviteMessage.textContent = `Invite from ${from} to join room ${roomId}`;
-        acceptInviteBtn.onclick = async () => {
-          rooms.set(roomId, { peerId: from, status: 'pending' });
-          ws.send(JSON.stringify({
-            type: 'accept',
-            from: userId,
-            to: from,
-            roomId
-          }));
-          inviteModal.classList.add('hidden');
-          updateRoomList();
-          switchRoom(roomId);
-        };
-        rejectInviteBtn.onclick = () => {
-          ws.send(JSON.stringify({
-            type: 'reject',
-            from: userId,
-            to: from,
-            roomId
-          }));
-          inviteModal.classList.add('hidden');
-        };
-      } else if (type === 'accept') {
-        const peer = createPeerConnection(from, roomId);
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
-        ws.send(JSON.stringify({
-          type: 'offer',
-          from: userId,
-          to: from,
-          roomId,
-          sdp: peer.localDescription
-        }));
-        rooms.get(roomId).status = 'connecting';
-        updateRoomList();
-      } else if (type === 'offer') {
-        const peer = createPeerConnection(from, roomId);
-        await peer.setRemoteDescription(new RTCSessionDescription(sdp));
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        ws.send(JSON.stringify({
-          type: 'answer',
-          from: userId,
-          to: from,
-          roomId,
-          sdp: peer.localDescription
-        }));
-      } else if (type === 'answer') {
-        const peer = peers.get(from);
-        await peer.setRemoteDescription(new RTCSessionDescription(sdp));
-      } else if (type === 'ice') {
-        const peer = peers.get(from);
-        if (peer) {
-          await peer.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-      } else if (type === 'reject') {
-        rooms.delete(roomId);
-        updateRoomList();
-      }
-    };
-
-    // Send Invite
-    sendInviteBtn.addEventListener('click', () => {
-      const inviteeId = inviteIdInput.value.trim();
-      if (inviteeId && inviteeId !== userId) {
-        const roomId = generateUUID();
-        rooms.set(roomId, { peerId: inviteeId, status: 'pending' });
-        ws.send(JSON.stringify({
-          type: 'invite',
-          from: userId,
-          to: inviteeId,
-          roomId
-        }));
-        updateRoomList();
-        inviteIdInput.value = '';
-      } else {
-        alert('Invalid or own ID');
-      }
-    });
-
-    // Update Room List
-    function updateRoomList() {
-      roomList.innerHTML = '';
-      rooms.forEach((room, roomId) => {
-        const li = document.createElement('li');
-        li.className = 'p-2 bg-gray-100 rounded cursor-pointer hover:bg-gray-200';
-        li.textContent = `Room with ${room.peerId} (${room.status})`;
-        li.onclick = () => switchRoom(roomId);
-        roomList.appendChild(li);
-      });
-    }
-
-    // Switch Room
-    async function switchRoom(roomId) {
-      currentRoom = roomId;
-      const room = rooms.get(roomId);
-      chatHeader.textContent = `Chat with ${room.peerId}`;
-      messagesDiv.innerHTML = '';
-      const messages = await loadMessages(roomId);
-      messages.forEach(msg => displayMessage(roomId, msg, false));
-    }
-
-    // Send Message
-    sendMessageBtn.addEventListener('click', sendMessage);
-    messageInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') sendMessage();
-    });
-
-    function sendMessage() {
-      if (!currentRoom) return;
-      const text = messageInput.value.trim();
-      if (text) {
-        const message = {
-          sender: userId,
-          type: 'text',
-          content: text,
-          timestamp: new Date().toISOString()
-        };
-        sendToPeer(currentRoom, message);
-        displayMessage(currentRoom, message);
-        saveMessage(currentRoom, message);
-        messageInput.value = '';
-      }
-    }
-
-    // Attach File
-    attachFileBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', async () => {
-      if (!currentRoom || !fileInput.files[0]) return;
-      const file = fileInput.files[0];
-      const reader = new FileReader();
-      reader.onload = () => {
-        const message = {
-          sender: userId,
-          type: file.type.startsWith('image') ? 'image' : 'video',
-          content: reader.result,
-          timestamp: new Date().toISOString()
-        };
-        sendToPeer(currentRoom, message);
-        displayMessage(currentRoom, message);
-        saveMessage(currentRoom, message);
-      };
-      reader.readAsDataURL(file);
-      fileInput.value = '';
-    });
-
-    // Send Message to Peer
-    function sendToPeer(roomId, message) {
-      const room = rooms.get(roomId);
-      const peer = peers.get(room.peerId);
-      if (peer && peer.connectionState === 'connected') {
-        const channel = peer.getSenders().length ? peer.getSenders()[0].track : peer.createDataChannel('chat');
-        channel.send(JSON.stringify(message));
-      } else {
-        // Queue message if offline
-        navigator.serviceWorker.controller.postMessage({
-          type: 'queueMessage',
-          roomId,
-          message
-        });
-      }
-    }
-
-    // Display Message
-    function displayMessage(roomId, message, animate = true) {
-      if (currentRoom !== roomId) return;
+    function appendMessage(message, isOwn = false) {
       const div = document.createElement('div');
-      div.className = `p-2 my-1 rounded ${message.sender === userId ? 'bg-blue-100 ml-auto' : 'bg-gray-100 mr-auto'} max-w-md`;
-      if (message.type === 'text') {
-        div.textContent = message.content;
-      } else if (message.type === 'image') {
-        const img = document.createElement('img');
-        img.src = message.content;
-        img.className = 'max-w-full h-auto rounded';
-        div.appendChild(img);
-      } else if (message.type === 'video') {
-        const video = document.createElement('video');
-        video.src = message.content;
-        video.controls = true;
-        video.className = 'max-w-full h-auto rounded';
-        div.appendChild(video);
-      }
-      div.innerHTML += `<span class="text-xs text-gray-500 block">${new Date(message.timestamp).toLocaleTimeString()}</span>`;
-      messagesDiv.appendChild(div);
-      if (animate) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      div.className = 'msg';
+      div.textContent = (isOwn ? 'You: ' : 'Peer: ') + message;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    // Register Service Worker
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').then(reg => {
-        console.log('Service Worker registered');
-      });
-    }
+    button.onclick = () => {
+      const msg = input.value.trim();
+      if (!msg) return;
+      appendMessage(msg, true);
+      channel.postMessage(msg);
+      input.value = '';
+    };
 
-    // WebSocket Connection
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'register', id: userId }));
+    channel.onmessage = (e) => {
+      appendMessage(e.data, false);
     };
   </script>
 </body>
